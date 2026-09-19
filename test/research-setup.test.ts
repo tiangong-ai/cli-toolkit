@@ -62,6 +62,7 @@ import {
   type ResearchSetupWizardPrompt,
 } from "../src/research/workspace/setup-wizard.js";
 import {
+  acquireFileLock,
   canonicalJson,
   hashRegularTree,
   sha256File,
@@ -3001,6 +3002,12 @@ describe("POST capability broker compatibility", () => {
 });
 
 describe("standalone setup doctor convergence", () => {
+  const runner = async ({ command }: { command: string }) => ({
+    exitCode: 0,
+    stdout: `${command} fixture-version`,
+    stderr: "",
+  });
+
   it("stops prescribing doctor after current-plan checks recover to READY", async () => {
     const root = await temporaryDirectory();
     const runner = async ({ command }: { command: string }) => ({
@@ -3032,6 +3039,187 @@ describe("standalone setup doctor convergence", () => {
       const context = await inspectResearchContext(root);
       assert.equal(context.setup?.status, "ready");
       assert.equal(context.setup?.next, null);
+      const stateBytes = await readFile(workspacePaths(root).setupState, "utf8");
+      await doctorResearchSetup(root, { live: true, environment: {}, runner });
+      assert.equal(await readFile(workspacePaths(root).setupState, "utf8"), stateBytes);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps cached READY reports and weak checks from completing installation", async () => {
+    const root = await temporaryDirectory();
+    try {
+      await createEmptyPlan(root);
+      const applied = await applyResearchSetupPlan(workspacePaths(root).setupPlan, {
+        environment: {},
+        runner,
+      });
+      await writeFile(
+        workspacePaths(root).setupReport,
+        JSON.stringify({
+          ...applied.report,
+          researchReadiness: "READY",
+          overallReadiness: "READY",
+        }),
+      );
+      assert.equal((await inspectResearchSetupStatus(root, {})).state.status, "partially-ready");
+      assert.equal((await inspectResearchContext(root)).setup?.next?.action, "doctor");
+      const report = await doctorResearchSetup(root, { environment: {}, runner });
+      assert.equal(report.overallReadiness, "PARTIALLY_READY");
+      assert.equal((await inspectResearchSetupStatus(root, {})).state.status, "partially-ready");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports newly skipped live checks instead of retaining historical readiness", async () => {
+    const root = await temporaryDirectory();
+    try {
+      await createEmptyPlan(root);
+      await applyResearchSetupPlan(workspacePaths(root).setupPlan, { environment: {}, runner });
+      await doctorResearchSetup(root, { live: true, environment: {}, runner });
+      assert.equal((await inspectResearchSetupStatus(root, {})).state.status, "ready");
+      const report = await doctorResearchSetup(root, { environment: {}, runner });
+      assert.equal(report.overallReadiness, "PARTIALLY_READY");
+      assert.equal((await inspectResearchSetupStatus(root, {})).state.status, "partially-ready");
+      assert.equal((await inspectResearchContext(root)).setup?.next?.action, "doctor");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  for (const phase of ["pending", "applying", "blocked"] as const) {
+    it(`does not erase an incomplete ${phase} installation with a healthy diagnostic`, async () => {
+      const root = await temporaryDirectory();
+      try {
+        await createEmptyPlan(root);
+        const applied = await applyResearchSetupPlan(workspacePaths(root).setupPlan, {
+          environment: {},
+          runner,
+          skipDoctor: true,
+        });
+        const state = {
+          ...applied.state,
+          status: phase,
+          completedSteps: phase === "blocked" ? applied.state.completedSteps : ["workspace"],
+          currentStep: phase === "applying" ? "skill-install" : null,
+          lastError:
+            phase === "blocked"
+              ? {
+                  code: "FIXTURE_INSTALL_FAILURE",
+                  step: "skill-install",
+                  reason: "Incomplete install",
+                  minimumAction: "Repair the installer",
+                  retryCommand: "fixture retry",
+                }
+              : null,
+        };
+        const bytes = JSON.stringify(state);
+        await writeFile(workspacePaths(root).setupState, bytes);
+        const report = await doctorResearchSetup(root, { live: true, environment: {}, runner });
+        assert.equal(report.overallReadiness, "READY");
+        assert.equal(await readFile(workspacePaths(root).setupState, "utf8"), bytes);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("reflects a real readiness failure and permits a later fresh recovery", async () => {
+    const root = await temporaryDirectory();
+    try {
+      await createEmptyPlan(root);
+      await applyResearchSetupPlan(workspacePaths(root).setupPlan, { environment: {}, runner });
+      await doctorResearchSetup(root, { live: true, environment: {}, runner });
+      const failed = await doctorResearchSetup(root, {
+        live: true,
+        environment: {},
+        runner: async (request) =>
+          request.command === "git"
+            ? { exitCode: 1, stdout: "", stderr: "fixture missing git" }
+            : runner(request),
+      });
+      assert.equal(failed.overallReadiness, "BLOCKED");
+      assert.equal((await inspectResearchSetupStatus(root, {})).state.status, "blocked");
+      await doctorResearchSetup(root, { live: true, environment: {}, runner });
+      assert.equal((await inspectResearchContext(root)).setup?.next, null);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  for (const target of ["setupPlan", "config", "setupState"] as const) {
+    it(`rejects a concurrently changed ${target} before publishing readiness`, async () => {
+      const root = await temporaryDirectory();
+      try {
+        await createEmptyPlan(root);
+        await applyResearchSetupPlan(workspacePaths(root).setupPlan, { environment: {}, runner });
+        const paths = workspacePaths(root);
+        const previousReport = await readFile(paths.setupReport, "utf8");
+        let changed = false;
+        let concurrentBytes = "";
+        await assert.rejects(
+          doctorResearchSetup(root, {
+            live: true,
+            environment: {},
+            runner: async (request) => {
+              if (!changed) {
+                changed = true;
+                const value = JSON.parse(await readFile(paths[target], "utf8"));
+                if (target === "config") value.budget.maxInputContextTokens += 1;
+                else if (target === "setupState") value.attempts += 1;
+                else {
+                  // Plans are immutable (0444); deliberately replace the binding
+                  // as an external writer, including in the non-root container.
+                  await chmod(paths.setupPlan, 0o600);
+                  value.createdAt = new Date(Date.parse(value.createdAt) + 1000).toISOString();
+                  const { planSha256: _oldHash, ...core } = value;
+                  value.planSha256 = sha256Text(canonicalJson(core));
+                }
+                concurrentBytes = JSON.stringify(value);
+                await writeFile(paths[target], concurrentBytes);
+              }
+              return runner(request);
+            },
+          }),
+          errorCode("RESEARCH_SETUP_DOCTOR_CONFLICT"),
+        );
+        assert.equal(changed, true);
+        assert.equal(await readFile(paths[target], "utf8"), concurrentBytes);
+        assert.equal(await readFile(paths.setupReport, "utf8"), previousReport);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("refuses a competing setup lock before running any probe", async () => {
+    const root = await temporaryDirectory();
+    try {
+      const plan = await createEmptyPlan(root);
+      await applyResearchSetupPlan(workspacePaths(root).setupPlan, { environment: {}, runner });
+      const release = await acquireFileLock(workspacePaths(root).setupLock, {
+        operation: "fixture.apply",
+        planSha256: plan.planSha256,
+      });
+      let probes = 0;
+      try {
+        await assert.rejects(
+          doctorResearchSetup(root, {
+            live: true,
+            environment: {},
+            runner: async (request) => {
+              probes += 1;
+              return runner(request);
+            },
+          }),
+          errorCode("RESEARCH_WORKSPACE_LOCKED"),
+        );
+        assert.equal(probes, 0);
+      } finally {
+        await release();
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
