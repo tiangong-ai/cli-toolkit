@@ -980,7 +980,7 @@ export async function applyResearchSetupPlan(
       return { schemaVersion: 1 as const, plan, state, report: null };
     }
     state = await startSetupStep(root, state, "doctor");
-    const report = await doctorResearchSetup(root, {
+    const report = await collectResearchSetupDoctorReport(root, {
       live: plan.checks.live,
       allowSyntheticUnstructureUpload: plan.checks.allowSyntheticUnstructureUpload,
       agentSmoke: plan.checks.agentSmoke,
@@ -990,14 +990,10 @@ export async function applyResearchSetupPlan(
       ...(options.sleeper === undefined ? {} : { sleeper: options.sleeper }),
       ...(options.executor === undefined ? {} : { executor: options.executor }),
     });
+    await writeJsonAtomic(paths.setupReport, report);
     state = await updateSetupState(root, {
       ...state,
-      status:
-        report.researchReadiness === "BLOCKED"
-          ? "blocked"
-          : report.overallReadiness === "PARTIALLY_READY"
-            ? "partially-ready"
-            : "ready",
+      status: setupStatusFromDoctorReport(report),
       currentStep: null,
       completedSteps: [...new Set([...state.completedSteps, "doctor"])],
     });
@@ -1905,18 +1901,119 @@ export async function runResearchSetupCompanion(
       });
 }
 
+export interface ResearchSetupDoctorOptions {
+  live?: boolean;
+  allowSyntheticUnstructureUpload?: boolean;
+  agentSmoke?: boolean;
+  environment?: NodeJS.ProcessEnv;
+  runner?: SetupCommandRunner;
+  fetcher?: typeof fetch;
+  sleeper?: (milliseconds: number) => Promise<unknown>;
+  executor?: DoctorOptions["executor"];
+}
+
+export function setupStatusFromDoctorReport(report: {
+  researchReadiness: "READY" | "BLOCKED";
+  overallReadiness: "READY" | "PARTIALLY_READY" | "BLOCKED";
+}): "ready" | "partially-ready" | "blocked" {
+  return report.researchReadiness === "BLOCKED" || report.overallReadiness === "BLOCKED"
+    ? "blocked"
+    : report.overallReadiness === "PARTIALLY_READY"
+      ? "partially-ready"
+      : "ready";
+}
+
+function doctorConvergenceConflict(root: string) {
+  return setupError({
+    code: "RESEARCH_SETUP_DOCTOR_CONFLICT",
+    step: "doctor",
+    reason: "Setup inputs changed during doctor; the report cannot update this generation.",
+    minimumAction: "Inspect current setup state, then rerun doctor against the unchanged plan.",
+    retryCommand: exactResearchCliCommand([
+      "research",
+      "setup",
+      "doctor",
+      "--workspace",
+      root,
+      "--json",
+    ]),
+    exitCode: 3,
+  });
+}
+
+async function setupDoctorBindings(root: string): Promise<string> {
+  const paths = workspacePaths(root);
+  const hashes: Array<string | null> = [];
+  for (const path of [
+    paths.setupPlan,
+    paths.setupState,
+    paths.setupReport,
+    paths.marker,
+    paths.config,
+    paths.runtimeLock,
+    paths.capabilityDeclarations,
+    paths.capabilityLock,
+    paths.env,
+    paths.setupAdapterEnv,
+    paths.setupConfig,
+    paths.setupDeclarationBinding,
+  ]) {
+    const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (info && (!info.isFile() || info.isSymbolicLink())) throw doctorConvergenceConflict(root);
+    hashes.push(info ? await sha256File(path) : null);
+  }
+  return canonicalJson(hashes);
+}
+
 export async function doctorResearchSetup(
   workspace: string,
-  options: {
-    live?: boolean;
-    allowSyntheticUnstructureUpload?: boolean;
-    agentSmoke?: boolean;
-    environment?: NodeJS.ProcessEnv;
-    runner?: SetupCommandRunner;
-    fetcher?: typeof fetch;
-    sleeper?: (milliseconds: number) => Promise<unknown>;
-    executor?: DoctorOptions["executor"];
-  } = {},
+  options: ResearchSetupDoctorOptions = {},
+) {
+  const requested = requireAbsoluteWorkspace(resolve(workspace));
+  const root = await realpath(requested).catch(() => requested);
+  const paths = workspacePaths(root);
+  const plan = await loadAndVerifyResearchSetupPlan(paths.setupPlan);
+  if (plan.workspace.path !== root) throw doctorConvergenceConflict(root);
+  const release = await acquireFileLock(paths.setupLock, setupLockPayload(plan.planSha256));
+  try {
+    if ((await loadAndVerifyResearchSetupPlan(paths.setupPlan)).planSha256 !== plan.planSha256)
+      throw doctorConvergenceConflict(root);
+    const bindings = await setupDoctorBindings(root);
+    const state = await loadSetupState(root, plan.planSha256);
+    const report = await collectResearchSetupDoctorReport(root, options);
+    if (bindings !== (await setupDoctorBindings(root))) throw doctorConvergenceConflict(root);
+    await writeJsonAtomic(paths.setupReport, report);
+    // A fresh diagnostic is not permission to finish an unapplied plan or erase
+    // an installation failure. Apply and upgrade own those transitions.
+    if (
+      ["partially-ready", "ready", "blocked"].includes(state.status) &&
+      state.currentStep === null &&
+      state.lastError === null &&
+      state.completedSteps.includes("settings")
+    ) {
+      const status = setupStatusFromDoctorReport(report);
+      if (state.status !== status || !state.completedSteps.includes("doctor")) {
+        await updateSetupState(root, {
+          ...state,
+          status,
+          completedSteps: [...new Set([...state.completedSteps, "doctor"])],
+        });
+      }
+    }
+    return report;
+  } finally {
+    await release();
+  }
+}
+
+// Apply/upgrade already hold setupLock and persist their own report and state.
+// Keep probe collection separate so they never re-enter the public lock owner.
+export async function collectResearchSetupDoctorReport(
+  workspace: string,
+  options: ResearchSetupDoctorOptions = {},
 ) {
   const root = requireAbsoluteWorkspace(resolve(workspace));
   const environment = options.environment ?? process.env;
@@ -2410,7 +2507,6 @@ export async function doctorResearchSetup(
     },
     setupSecrets,
   );
-  await writeJsonAtomic(paths.setupReport, report);
   return report as typeof report & {
     readiness: "READY" | "BLOCKED";
     researchReadiness: "READY" | "BLOCKED";

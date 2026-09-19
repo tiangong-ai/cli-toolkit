@@ -10,7 +10,8 @@ import {
   applyResearchSetupPlan,
   assertUpgradeParent,
   createResearchSetupPlan,
-  doctorResearchSetup,
+  collectResearchSetupDoctorReport,
+  setupStatusFromDoctorReport,
   loadAndVerifyResearchSetupPlan,
   loadHashVerifiedResearchSetupPlan,
   researchSetupUpgradeCandidatePath,
@@ -657,7 +658,7 @@ export async function applyManagedSetupUpgrade(
       await save(dir, state);
       await releaseWorkspace();
       releaseWorkspace = null;
-      const report = await doctorResearchSetup(root, {
+      const report = await collectResearchSetupDoctorReport(root, {
         live: plan.checks.live,
         allowSyntheticUnstructureUpload: plan.checks.allowSyntheticUnstructureUpload,
         agentSmoke: plan.checks.agentSmoke,
@@ -667,12 +668,8 @@ export async function applyManagedSetupUpgrade(
         ...(options.sleeper ? { sleeper: options.sleeper } : {}),
         ...(options.executor ? { executor: options.executor } : {}),
       });
-      setupState.status =
-        report.researchReadiness === "BLOCKED"
-          ? "blocked"
-          : report.overallReadiness === "PARTIALLY_READY"
-            ? "partially-ready"
-            : "ready";
+      await writeJsonAtomic(p.setupReport, report);
+      setupState.status = setupStatusFromDoctorReport(report);
       setupState.completedSteps = [...new Set([...setupState.completedSteps, "doctor"])];
       setupState.updatedAt = new Date().toISOString();
       await writeJsonAtomic(p.setupState, setupState);

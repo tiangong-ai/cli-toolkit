@@ -570,6 +570,12 @@ optional selected-component failures remain visible as a non-zero incomplete
 setup instead of a false success. The native producer is still not launched as
 a child process.
 
+After installation, a fresh standalone `research setup doctor` also updates
+the current setup progress. When its checks reach `READY`, `setup status` and
+`context inspect` stop prescribing Doctor. Static or incomplete checks retain
+partial readiness; an unfinished installation still requires apply/resume.
+Doctor refuses concurrent setup changes instead of publishing a stale result.
+
 Before project initialization, a setup-only audit can be exported without
 rerunning Doctor, contacting a provider, or launching a model. The exporter
 creates a new portable directory atomically and verifies it before returning.

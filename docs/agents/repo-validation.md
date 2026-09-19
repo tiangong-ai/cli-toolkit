@@ -798,6 +798,15 @@ A process-spawn mock verifies exact taskkill arguments and rejects signaling an
 unspawned helper before its error event has been delivered.
 Clean-container RED/GREEN remains authoritative; host results are supplemental.
 
+Standalone setup Doctor regression coverage reproduces the native upgrade case
+where a fresh READY report left both status/context prescribing Doctor. It also
+checks repeated-call state idempotency, incomplete installs, weak/cached checks,
+blocked-check recovery, active setup leases and concurrent plan/config/state
+changes. The plan-change fixture explicitly makes the immutable plan writable
+to simulate an external writer under the non-root clean-container user.
+The same scenarios run on Windows with its expected partial-readiness warning;
+they do not skip the suite or grant Windows unsupported native execution.
+
 Design-amendment regressions exercise public plan/apply/status with exact source
 confirmation, forbidden edits, changed Policy/parents, dangling immutable paths,
 BOM-bearing UTF-8, interrupted postcommit projection recovery, multiple versions,

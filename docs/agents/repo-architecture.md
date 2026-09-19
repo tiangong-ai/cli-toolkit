@@ -363,6 +363,14 @@ Only the current candidate CLI interprets the new recovery command. Publication
 metadata discovery remains an optional, bounded, read-only npm query for one
 explicit stable version; it is not an automatic updater or package attestation.
 
+Standalone setup Doctor owns the setup lease while collecting fresh checks and
+persisting the report. It verifies the current plan and control-file bindings
+before updating an installed generation's readiness. Pending/applying states
+and installation errors remain owned by apply/resume. Apply and upgrade reuse
+the same probe collector and readiness mapping under their existing lease,
+without acquiring it recursively. Status/context remain read-only projections
+of setup state; a cached READY report cannot complete installation.
+
 The recommended `tiangong-auto-research` tree is an external orchestrator role,
 not an evidence capability. Wizard selection is explicit and project-local by
 default. Evidence defaults to Brave web/news; context and media profiles remain
