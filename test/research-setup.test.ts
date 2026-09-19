@@ -3000,6 +3000,44 @@ describe("POST capability broker compatibility", () => {
   });
 });
 
+describe("standalone setup doctor convergence", () => {
+  it("stops prescribing doctor after current-plan checks recover to READY", async () => {
+    const root = await temporaryDirectory();
+    const runner = async ({ command }: { command: string }) => ({
+      exitCode: 0,
+      stdout: `${command} fixture-version`,
+      stderr: "",
+    });
+    try {
+      await createEmptyPlan(root);
+      const applied = await applyResearchSetupPlan(workspacePaths(root).setupPlan, {
+        environment: {},
+        runner,
+      });
+      assert.equal(applied.state.status, "partially-ready");
+      assert.ok(applied.state.completedSteps.includes("doctor"));
+      const report = await doctorResearchSetup(root, {
+        live: true,
+        environment: {},
+        runner,
+      });
+      assert.equal(report.overallReadiness, "READY");
+      assert.equal(report.planSha256, applied.plan.planSha256);
+
+      // Real native upgrade case: this report was READY, but both public readers
+      // continued returning partially-ready/next doctor, causing repeated probes.
+      const status = await inspectResearchSetupStatus(root, {});
+      assert.equal(status.state.status, "ready");
+      assert.equal(status.next, null);
+      const context = await inspectResearchContext(root);
+      assert.equal(context.setup?.status, "ready");
+      assert.equal(context.setup?.next, null);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 async function createEmptyPlan(root: string) {
   return createResearchSetupPlan({
     workspace: root,
