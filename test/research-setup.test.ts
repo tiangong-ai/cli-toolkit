@@ -3002,6 +3002,10 @@ describe("POST capability broker compatibility", () => {
 });
 
 describe("standalone setup doctor convergence", () => {
+  // Windows supports configuration/smoke only; keep its platform warning visible.
+  const supportsNativeExecution = platform() === "darwin" || platform() === "linux";
+  const recoveredReadiness = supportsNativeExecution ? "READY" : "PARTIALLY_READY";
+  const recoveredStatus = supportsNativeExecution ? "ready" : "partially-ready";
   const runner = async ({ command }: { command: string }) => ({
     exitCode: 0,
     stdout: `${command} fixture-version`,
@@ -3028,17 +3032,17 @@ describe("standalone setup doctor convergence", () => {
         environment: {},
         runner,
       });
-      assert.equal(report.overallReadiness, "READY");
+      assert.equal(report.overallReadiness, recoveredReadiness);
       assert.equal(report.planSha256, applied.plan.planSha256);
 
       // Real native upgrade case: this report was READY, but both public readers
       // continued returning partially-ready/next doctor, causing repeated probes.
       const status = await inspectResearchSetupStatus(root, {});
-      assert.equal(status.state.status, "ready");
-      assert.equal(status.next, null);
+      assert.equal(status.state.status, recoveredStatus);
+      assert.equal(status.next?.action ?? null, supportsNativeExecution ? null : "doctor");
       const context = await inspectResearchContext(root);
-      assert.equal(context.setup?.status, "ready");
-      assert.equal(context.setup?.next, null);
+      assert.equal(context.setup?.status, recoveredStatus);
+      assert.equal(context.setup?.next?.action ?? null, supportsNativeExecution ? null : "doctor");
       const stateBytes = await readFile(workspacePaths(root).setupState, "utf8");
       await doctorResearchSetup(root, { live: true, environment: {}, runner });
       assert.equal(await readFile(workspacePaths(root).setupState, "utf8"), stateBytes);
@@ -3079,7 +3083,7 @@ describe("standalone setup doctor convergence", () => {
       await createEmptyPlan(root);
       await applyResearchSetupPlan(workspacePaths(root).setupPlan, { environment: {}, runner });
       await doctorResearchSetup(root, { live: true, environment: {}, runner });
-      assert.equal((await inspectResearchSetupStatus(root, {})).state.status, "ready");
+      assert.equal((await inspectResearchSetupStatus(root, {})).state.status, recoveredStatus);
       const report = await doctorResearchSetup(root, { environment: {}, runner });
       assert.equal(report.overallReadiness, "PARTIALLY_READY");
       assert.equal((await inspectResearchSetupStatus(root, {})).state.status, "partially-ready");
@@ -3118,7 +3122,7 @@ describe("standalone setup doctor convergence", () => {
         const bytes = JSON.stringify(state);
         await writeFile(workspacePaths(root).setupState, bytes);
         const report = await doctorResearchSetup(root, { live: true, environment: {}, runner });
-        assert.equal(report.overallReadiness, "READY");
+        assert.equal(report.overallReadiness, recoveredReadiness);
         assert.equal(await readFile(workspacePaths(root).setupState, "utf8"), bytes);
       } finally {
         await rm(root, { recursive: true, force: true });
@@ -3143,7 +3147,11 @@ describe("standalone setup doctor convergence", () => {
       assert.equal(failed.overallReadiness, "BLOCKED");
       assert.equal((await inspectResearchSetupStatus(root, {})).state.status, "blocked");
       await doctorResearchSetup(root, { live: true, environment: {}, runner });
-      assert.equal((await inspectResearchContext(root)).setup?.next, null);
+      assert.equal(
+        (await inspectResearchContext(root)).setup?.next?.action ?? null,
+        supportsNativeExecution ? null : "doctor",
+      );
+      assert.equal((await inspectResearchSetupStatus(root, {})).state.status, recoveredStatus);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
