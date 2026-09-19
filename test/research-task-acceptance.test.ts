@@ -41,6 +41,7 @@ import {
 } from "../src/research/workspace/content-evidence.js";
 import { recordDiscoveryAssessmentBatch } from "../src/research/workspace/discovery.js";
 import { listEvidenceCandidates } from "../src/research/workspace/evidence-ledger.js";
+import { validateTaskReview } from "../src/research/workspace/task-acceptance.js";
 import {
   prepareNativeResearchStage,
   runResearchWorkspace,
@@ -1807,6 +1808,259 @@ describe("lightweight original task and authorized scope", () => {
   });
 });
 
+describe("honest dispositions and non-execution check kinds", () => {
+  it("refuses invented task assessment when the legacy project has no task authority", () => {
+    assert.doesNotThrow(() => validateTaskReview({ decision: "pass" }, null));
+    assert.throws(
+      () => validateTaskReview({ decision: "pass", taskAssessment: {} }, null),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "RESEARCH_TASK_REVIEW_INVALID");
+        return true;
+      },
+    );
+  });
+
+  it("withholds reviewer budget until every current requirement has an honest disposition", async () => {
+    const fx = await acquiredFixture();
+    try {
+      await finishProducer(fx);
+      const stages: string[] = [];
+      const run = await runResearchWorkspace(
+        fx.root,
+        { maxParallel: 1, maxCycles: 1, dryRun: false, environment: {} },
+        async (request) => {
+          stages.push(request.prompt.match(/^Stage: ([a-z]+)$/m)?.[1] ?? "unknown");
+          throw new Error(
+            "Fixture precondition: no agent stage should execute before the disposition gate.",
+          );
+        },
+      );
+      assert.deepEqual(
+        stages.filter((stage) => stage === "review"),
+        [],
+        "The review package must not spend a reviewer before every current requirement has a disposition.",
+      );
+      assert.notEqual(run.status, "complete");
+      const review = (await loadProject(fx.root, "task-project")).packages.find(
+        (item) => item.stage === "review",
+      );
+      assert.match(
+        review?.lastError ?? "",
+        /honest not-run\/inconclusive disposition/,
+        "The pre-review gate must report its own disposition requirement.",
+      );
+      const status = JSON.parse((await fx.task(["status"])).stdout);
+      assert.deepEqual(
+        status.currentScope.requirements.map((entry: { status: string }) => entry.status),
+        ["unanswered", "unanswered"],
+      );
+      assert.equal(status.currentScope.status, "incomplete");
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  it("records a zero-binding not-run disposition that admits review without becoming an answer", async () => {
+    const fx = await acquiredFixture();
+    try {
+      for (const row of fx.rows)
+        assert.equal((await recordAcceptance(fx, dispositionInput(row, "not-run"))).exitCode, 0);
+      const recorded = JSON.parse((await fx.task(["status"])).stdout);
+      const recordedStatuses = recorded.currentScope.requirements.map(
+        (entry: { id: string; status: string }) => entry.status,
+      );
+      assert.deepEqual(
+        recordedStatuses,
+        ["not-run", "not-run"],
+        "An honest not-run disposition is neither unanswered nor a recorded answer.",
+      );
+      await finishProducer(fx);
+      let reviews = 0;
+      const run = await runResearchWorkspace(
+        fx.root,
+        { maxParallel: 1, maxCycles: 2, dryRun: false, environment: {} },
+        async (request) => {
+          const stage = request.prompt.match(/^Stage: ([a-z]+)$/m)?.[1];
+          if (stage !== "review")
+            throw new Error(`Fixture precondition: unexpected ${stage ?? "unknown"} stage.`);
+          reviews += 1;
+          const packet = JSON.parse(
+            await readFile(join(request.projectRoot, "inputs/review-packet.json"), "utf8"),
+          );
+          assert.deepEqual(
+            packet.taskAcceptance.requirements.map((row: { status: string }) => row.status),
+            ["not-run", "not-run"],
+          );
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              schemaVersion: 1,
+              packetSha256: packet.packetSha256,
+              decision: "pass",
+              issues: [],
+              rationale: "The report states honestly that the required checks were not run.",
+              taskAssessment: {
+                contextSha256: packet.taskAcceptance.contextSha256,
+                requirements: packet.taskAcceptance.requirements.map(
+                  (row: { requirementSha256: string }) => ({
+                    requirementSha256: row.requirementSha256,
+                    decision: "not-answered",
+                    reason: "A not-run disposition cannot answer its requirement.",
+                  }),
+                ),
+              },
+            }),
+            stderr: "",
+            tokens: 10,
+            inputTokens: 5,
+            cachedInputTokens: 0,
+            outputTokens: 5,
+            costUsd: 0,
+            wallSeconds: 0,
+            model: null,
+            runtime: null,
+          };
+        },
+      );
+      assert.equal(reviews, 1, "A recorded not-run disposition must admit the review stage.");
+      assert.equal(run.status, "complete");
+      const after = JSON.parse((await fx.task(["status"])).stdout);
+      assert.equal(after.currentScope.status, "incomplete");
+      assert.equal(after.originalScope.status, "incomplete");
+      assert.ok(
+        after.currentScope.requirements.every(
+          (entry: { status: string }) => entry.status === "not-run",
+        ),
+        "An honest not-run disposition must never be presented as a reviewed answer.",
+      );
+      assert.equal(run.projects[0]?.task?.executionCertified, false);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  it("rejects a review that converts a not-run disposition into an answered requirement", async () => {
+    const fx = await acquiredFixture();
+    try {
+      for (const row of fx.rows)
+        assert.equal((await recordAcceptance(fx, dispositionInput(row, "not-run"))).exitCode, 0);
+      await finishProducer(fx);
+      const run = await runResearchWorkspace(
+        fx.root,
+        { maxParallel: 1, maxCycles: 1, dryRun: false, environment: {} },
+        async (request) => {
+          const stage = request.prompt.match(/^Stage: ([a-z]+)$/m)?.[1];
+          if (stage !== "review")
+            throw new Error(`Fixture precondition: unexpected ${stage ?? "unknown"} stage.`);
+          const packet = JSON.parse(
+            await readFile(join(request.projectRoot, "inputs/review-packet.json"), "utf8"),
+          );
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              schemaVersion: 1,
+              packetSha256: packet.packetSha256,
+              decision: "pass",
+              issues: [],
+              rationale: "An overclaiming fixture that must be refused.",
+              taskAssessment: {
+                contextSha256: packet.taskAcceptance.contextSha256,
+                requirements: packet.taskAcceptance.requirements.map(
+                  (row: { requirementSha256: string }) => ({
+                    requirementSha256: row.requirementSha256,
+                    decision: "answered",
+                    reason: "Improperly converts a not-run disposition into an answer.",
+                  }),
+                ),
+              },
+            }),
+            stderr: "",
+            tokens: 10,
+            inputTokens: 5,
+            cachedInputTokens: 0,
+            outputTokens: 5,
+            costUsd: 0,
+            wallSeconds: 0,
+            model: null,
+            runtime: null,
+          };
+        },
+      );
+      assert.notEqual(run.status, "complete");
+      const review = (await loadProject(fx.root, "task-project")).packages.find(
+        (item) => item.stage === "review",
+      );
+      assert.match(
+        review?.lastError ?? "",
+        /cannot turn missing, stale, inconclusive, failed or unexecuted checks into an answered requirement/,
+        "A not-run disposition must not be laundered into an answered requirement.",
+      );
+      const status = JSON.parse((await fx.task(["status"])).stdout);
+      assert.equal(status.currentScope.status, "incomplete");
+    } finally {
+      await fx.cleanup();
+    }
+  });
+
+  it("accepts a declared proof requirement and preserves its check kind on the record", async () => {
+    const fx = await acquiredFixture("proof");
+    try {
+      const declared = JSON.parse((await fx.task(["status"])).stdout);
+      assert.equal(declared.currentScope.requirements[0].checkKind, "proof");
+      const recorded = await recordAcceptance(
+        fx,
+        dispositionInput(fx.rows[0]!, "satisfied", {
+          checkKind: "proof",
+          atomIds: [fx.atom.atomId],
+        }),
+      );
+      assert.equal(recorded.exitCode, 0, recorded.stderr);
+      const status = JSON.parse((await fx.task(["status"])).stdout);
+      const row = status.currentScope.requirements.find(
+        (entry: { id: string }) => entry.id === fx.rows[0]!.id,
+      );
+      assert.equal(row.checkKind, "proof");
+      assert.equal(row.status, "recorded");
+      assert.equal(row.outcome, "satisfied");
+      const stored = JSON.parse(
+        await readFile(
+          join(
+            workspacePaths(fx.root).projects,
+            "task-project",
+            `task/acceptance/${row.recordSha256}.json`,
+          ),
+          "utf8",
+        ),
+      );
+      assert.equal(
+        stored.checkKind,
+        "proof",
+        "The stored record must keep its declared check kind.",
+      );
+      assert.equal(stored.trust, "native-observation");
+      assert.equal(stored.executionCertified, false);
+      const packet = JSON.parse(
+        JSON.stringify(
+          await prepareNativeResearchStage({
+            root: fx.root,
+            projectId: "task-project",
+            stage: "analyze",
+            hostAgent: "codex",
+          }),
+        ),
+      );
+      const packetRow = packet.taskAcceptance.requirements.find(
+        (entry: { id: string }) => entry.id === fx.rows[0]!.id,
+      );
+      assert.equal(packetRow.checkKind, "proof");
+      assert.equal(packetRow.status, "recorded");
+      assert.equal(packetRow.record.recordSha256, row.recordSha256);
+    } finally {
+      await fx.cleanup();
+    }
+  });
+});
+
 async function nativeRunTestRequest(
   fx: Awaited<ReturnType<typeof acquiredFixture>>,
   name: string,
@@ -1872,6 +2126,37 @@ function acceptanceInput(
     evidenceAtomIds: [atomId],
     analysisFindingIds: [],
     resultFiles,
+    limitations: ["Synthetic protocol fixture; not a scientific conclusion."],
+  };
+}
+
+/**
+ * A disposition that may bind nothing at all, so an honest not-run record and a declared
+ * non-execution check kind can be exercised without borrowing an unrelated fixture binding.
+ */
+function dispositionInput(
+  row: { id: string; requirementSha256: string },
+  outcome: string,
+  options: {
+    checkKind?: "evidence" | "computation" | "proof";
+    atomIds?: string[];
+    sourceIds?: string[];
+    resultFiles?: string[];
+  } = {},
+) {
+  return {
+    schemaVersion: 1,
+    requirementId: row.id,
+    requirementSha256: row.requirementSha256,
+    previousRecordSha256: null,
+    outcome,
+    summary: "An honest bounded disposition recorded for protocol verification, not a conclusion.",
+    checkKind: options.checkKind ?? "evidence",
+    reportedCommand: null,
+    sourceIds: options.sourceIds ?? [],
+    evidenceAtomIds: options.atomIds ?? [],
+    analysisFindingIds: [],
+    resultFiles: options.resultFiles ?? [],
     limitations: ["Synthetic protocol fixture; not a scientific conclusion."],
   };
 }
