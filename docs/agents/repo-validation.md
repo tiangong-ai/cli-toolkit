@@ -18,8 +18,8 @@ checkPaths:
   - scripts/**
   - test/**
   - .github/workflows/**
-lastReviewedAt: 2026-09-14
-lastReviewedCommit: 17b01253e904a39f004f31d3863374046cb4cb16
+lastReviewedAt: 2026-09-19
+lastReviewedCommit: b2657a8e7a88d700c84aaff082eed59cf50e0fc8
 ---
 
 # Repo Validation
@@ -287,6 +287,17 @@ It counts one existing reviewer call and one shared result context instead of
 using timing assertions. Publication regressions bind task context to the existing
 reviewers. Portable audit tests move the bundle, remove the source workspace, and
 reject altered task bindings even with a recomputed manifest digest.
+
+Honest-disposition regressions also prove that missing checks block reviewer
+spending, while zero-binding `not-run` records admit review without answering
+the task. A reviewer cannot promote those records to answers or invent task
+assessment for a legacy project without task authority. A `proof` check retains
+its declared kind and record identity through public intake, status and the
+native packet without acquiring execution certification. The existing handoff
+audit fixture explicitly remains `not-configured` and omits invented task
+authority after a project has already entered a native stage. These are
+protocol and legacy-shape checks, not real-host activation, scientific proof
+validation or universal compatibility with every historical project version.
 
 Request-provenance regressions preserve exact BOM/CRLF source bytes and hashed
 locators, distinguish interpreted/unrecorded origin, and reject false verbatim

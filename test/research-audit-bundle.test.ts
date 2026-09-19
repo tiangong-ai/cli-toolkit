@@ -71,13 +71,36 @@ describe("portable research audit bundles", () => {
         packet.sessionId,
       );
 
-      await exportProjectAuditBundle({ root, projectId, destination });
-      assert.equal((await verifyProjectAuditBundle(destination)).status, "verified");
+      const exported = await exportProjectAuditBundle({ root, projectId, destination });
+      const verified = await verifyProjectAuditBundle(destination);
+      assert.equal(verified.status, "verified");
       assert.equal(await readFile(ledgerPath, "utf8"), before);
       assert.equal(
         await readFile(join(destination, "project", "evidence", "ledger.jsonl"), "utf8"),
         before,
       );
+
+      // A project that reached a native stage without ever recording a task contract must
+      // stay unassessed instead of gaining task authority from the audit round trip.
+      assert.equal(
+        Object.hasOwn(exported.researchChain, "task"),
+        false,
+        "An absent task contract must not be exported as task authority.",
+      );
+      assert.equal(verified.task, undefined);
+      const taskStatus = await invokeCli([
+        "research",
+        "project",
+        "task",
+        "status",
+        projectId,
+        "--workspace",
+        root,
+        "--json",
+      ]);
+      assert.equal(taskStatus.exitCode, 0, taskStatus.stderr);
+      assert.equal(JSON.parse(taskStatus.stdout).status, "not-configured");
+      assert.equal(JSON.parse(taskStatus.stdout).executionCertified, false);
     } finally {
       await Promise.all([
         rm(root, { recursive: true, force: true }),

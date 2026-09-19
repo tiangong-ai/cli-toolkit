@@ -118,7 +118,7 @@ export async function fixture(pendingModels = false) {
 }
 
 export async function acquiredFixture(
-  checkKind: "evidence" | "computation" = "evidence",
+  checkKind: "evidence" | "computation" | "proof" = "evidence",
   inputPaddingBytes = 0,
   pendingModels = false,
 ) {
