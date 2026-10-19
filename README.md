@@ -12,8 +12,8 @@ checkPaths:
   - package.json
   - bin/**
   - src/**
-lastReviewedAt: 2026-09-14
-lastReviewedCommit: 17b01253e904a39f004f31d3863374046cb4cb16
+lastReviewedAt: 2026-10-20
+lastReviewedCommit: fee12538aca7bc35f8dfb0da3bbd7d5836a61124
 ---
 
 # Tiangong AI CLI
@@ -1267,6 +1267,41 @@ closed result with `research project addendum SOURCE --to TARGET`; the original
 closure remains unchanged, the child snapshot records a mechanical delta, and
 default status hides the superseded project (`research status --all` shows full
 lineage).
+
+Compare reusable literature metadata for two explicitly selected projects:
+
+```bash
+tiangong-ai research status --project PAPER_ONE --compare-project PAPER_TWO --workspace /absolute/path/to/workspace --json
+```
+
+The optional `literatureReuse` view groups shared DOI identities with ASCII-only
+case folding (and exact canonical URL fallback) separately from shared file
+SHA-256 hashes. Non-ASCII DOI case and suffix punctuation remain distinct, as
+specified by [DOI Handbook section 3.3.4](https://www.doi.org/doi-handbook/html/).
+It preserves each project's historical candidate/source/artifact IDs, declared
+nullable article version, provenance identifiers, exact atom locators, evidence
+functions including counterevidence, and frozen atom-to-finding-to-claim bindings. It
+returns metadata without source excerpts or filesystem locator fields; declared
+metadata and limitations remain unmodified. It performs no evidence copying,
+admission, approval, downloads, model calls, or accounting changes. Work matches
+are advisory; different file hashes remain separate representations and
+conflicting DOI metadata on identical bytes is flagged for investigation.
+An absent acquisition, typed-content snapshot, or claim graph is explicitly
+reported as absent. Project authority, gate decisions/reasons, limitations and
+unrepresented input IDs remain visible; integrity verification is separate
+from scientific applicability. Only registered artifact hashes are compared,
+not an exhaustive inventory of every project input. Present frozen objects and
+registered bytes must pass their existing integrity checks; corrupted or stale evidence refuses comparison.
+
+Both IDs must be explicit and distinct; `--all` cannot accompany comparison.
+Only those projects are inspected. Output is bounded to 50 groups per kind,
+20 entries per wrapped `items` list and 256 KiB for the comparison object, with
+explicit omission counts. Shared groups retain members from both projects
+before filling remaining member slots. Omitted groups or entries require
+further inspection through the existing exact artifact read channel. This view establishes identity and
+byte matches, not lawful reuse, substantive reading, scientific applicability,
+review approval, or measured token/time/billing savings. The ordinary status
+output remains available without `--compare-project`.
 
 For many content records, use `research project evidence decomposition batch
 <project-id> --record <absolute-json>` or `research project evidence atom batch

@@ -12,8 +12,8 @@ checkPaths:
   - README.md
   - src/**
   - bin/**
-lastReviewedAt: 2026-09-19
-lastReviewedCommit: b2657a8e7a88d700c84aaff082eed59cf50e0fc8
+lastReviewedAt: 2026-10-20
+lastReviewedCommit: fee12538aca7bc35f8dfb0da3bbd7d5836a61124
 ---
 
 # Repo Architecture
@@ -206,6 +206,21 @@ storage writes, queueing, and document status transitions.
   objects retain their sensitive-key context. Top-level status exposes the acquisition, typed-content,
   inference, and graph chain and distinguishes active base research from
   invalid scientific or publication state.
+- `src/research/workspace/literature-reuse.ts`: offline, read-only comparison
+  behind `research status --project A --compare-project B`. It derives normalized
+  ASCII-case-equivalent DOI/canonical-URL work matches separately from exact
+  registered file hashes (without folding non-ASCII case or suffix punctuation),
+  without changing historical identities or introducing a shared evidence store.
+  Existing ledger, artifact and frozen-snapshot loaders verify both selected
+  projects; corrupt or stale objects fail closed, and absent snapshots remain
+  absent. Metadata retains per-project provenance, source/artifact/version IDs,
+  atom locator/function/role/coverage bindings and available frozen finding/claim
+  relationships, including counterevidence. Source excerpts and filesystem
+  locator fields are omitted; declared metadata and limitations are retained.
+  No admission, scientific approval, provider/reviewer work or usage mutations
+  are introduced. It excludes unrelated project directory scans and bounds groups,
+  nested lists and comparison bytes with explicit omissions. The view is an
+  appraisal aid, never an automatic reuse eligibility decision.
 - `src/education/**`: education search command handling and source specs for
   course, education, and textbook edge-search functions.
 - `src/edge-search.ts`: shared edge-search forwarding helper. It derives

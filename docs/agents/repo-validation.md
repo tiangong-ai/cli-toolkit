@@ -18,8 +18,8 @@ checkPaths:
   - scripts/**
   - test/**
   - .github/workflows/**
-lastReviewedAt: 2026-09-19
-lastReviewedCommit: b2657a8e7a88d700c84aaff082eed59cf50e0fc8
+lastReviewedAt: 2026-10-20
+lastReviewedCommit: fee12538aca7bc35f8dfb0da3bbd7d5836a61124
 ---
 
 # Repo Validation
@@ -677,6 +677,25 @@ stage-time hash revalidation; machine-visible future obligations before their
 due gate and blocking errors at that gate; and the invariant that 200,000
 resamples of four independent structures still provide four independent
 structures.
+`test/research-literature-reuse.test.ts` exercises the public status JSON
+comparison for two explicit projects: normalized DOI work identity across
+separate URLs and file versions, exact shared bytes with distinct supporting
+and counterevidence uses, nonempty distinct project-local claim/finding
+bindings from a synthetic validated-design/hash-bound graph fixture (not
+scientific lifecycle approval), conflicting DOI metadata, ASCII-only DOI case
+folding with Unicode case and suffix punctuation preserved, absent snapshots,
+bounded output retaining both projects' members with omission counts, and refusal
+of changed content or artifact bytes. It checks idempotent results, unchanged
+control-tree bytes and zero provider calls, and verifies that an unrelated
+malformed project is not scanned. The public acquire-fork regression retains
+artifact hashes/atom locators, leaves the other project's bytes unchanged,
+records no new target stage usage and exposes no inherited claim graph before
+fresh analysis. It also preserves stopped-gate reasons, invalid project
+authority and explicit input-only scope omissions. This additive inspection
+surface does not alter acquisition, inheritance, review invalidation, admission or scientific
+gates; its authoritative regression gates are the independent offline
+clean-container RED/GREEN cycle and the existing child/root cold delivery
+checks. It does not establish a live research performance or billing result.
 `test/research-audit-bundle.test.ts` covers exact portable export and independent
 verification, formal evidence/artifact bytes, transformed input bindings,
 environment and journal proofs, read-only content, tamper/extra-byte rejection,

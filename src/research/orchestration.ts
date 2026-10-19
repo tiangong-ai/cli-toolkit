@@ -26,6 +26,7 @@ import {
   projectBudgetView,
   providerCostLimits,
 } from "./workspace/project-budget.js";
+import { inspectLiteratureReuse } from "./workspace/literature-reuse.js";
 import { lstat, readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -330,7 +331,7 @@ export function researchOrchestrationHelp(): string {
   tiangong-ai research project evidence acquisition revise <project-id> --expected-snapshot <sha256> --reason <text> [--include-discovery] [--workspace <path>] [--json]
   tiangong-ai research project evidence content status <project-id> [--workspace <path>] [--json]
   tiangong-ai research schema show <discover|acquire|analyze|synthesize|review|doctor|task-contract|task-scope-change|task-acceptance|scientific-design|scientific-assessment-research-design|scientific-assessment-evidence-construct|scientific-assessment-pilot-methods|scientific-review-research-design|scientific-review-evidence-construct|scientific-review-pilot-methods|publication-assessment|publication-review-evidence|publication-review-methods-reproducibility|publication-review-domain-novelty|publication-review-journal-editor> [--compatibility claude-code] [--json]
-  tiangong-ai research status [--project <project-id>] [--all] [--workspace <absolute-path>] [--json]
+  tiangong-ai research status [--project <project-id>] [--compare-project <project-id>] [--all] [--workspace <absolute-path>] [--json]
   tiangong-ai research run [--project <project-id>] [--max-parallel <1-8>] [--max-cycles <1-100>] [--dry-run] [--progress-jsonl] [--workspace <absolute-path>] [--json]
 
 Evidence input schemas: ${EVIDENCE_CONTENT_SCHEMA_NAMES.join(", ")}.
@@ -2652,16 +2653,35 @@ async function runProject(argv: string[], io: CliIO): Promise<number> {
 async function runStatus(argv: string[], io: CliIO): Promise<number> {
   const args = parseStrictArgs(
     argv,
-    { ...WORKSPACE_OPTIONS, project: "string", all: "boolean" },
+    { ...WORKSPACE_OPTIONS, project: "string", "compare-project": "string", all: "boolean" },
     "research status",
   );
   if (strictBoolean(args, "help")) return writeHelp(io);
   rejectPositionals(args.positionals, "research status");
+  const selectedProject = strictString(args, "project");
+  const comparisonProject = strictString(args, "compare-project");
+  if (
+    comparisonProject !== undefined &&
+    (!selectedProject ||
+      !comparisonProject ||
+      selectedProject === comparisonProject ||
+      strictBoolean(args, "all"))
+  ) {
+    throw new CliError(
+      "Literature comparison requires two distinct explicit project IDs and cannot use --all.",
+      {
+        code: "RESEARCH_LITERATURE_COMPARISON_INVALID",
+        exitCode: 2,
+      },
+    );
+  }
   const root = await workspaceFromArgs(args);
   const config = await loadWorkspaceConfig(root);
-  const selectedProject = strictString(args, "project");
   const authorityIndex = await readProjectAuthorityIndex(root);
-  const workspaceProjects = await listProjects(root, authorityIndex);
+  const workspaceProjects = comparisonProject ? [] : await listProjects(root, authorityIndex);
+  const literatureReuse = comparisonProject
+    ? await inspectLiteratureReuse(root, selectedProject!, comparisonProject, authorityIndex)
+    : undefined;
   const allProjects = selectedProject
     ? [
         workspaceProjects.find((project) => project.id === selectedProject) ??
@@ -2676,6 +2696,7 @@ async function runStatus(argv: string[], io: CliIO): Promise<number> {
         );
   const result = {
     workspace: root,
+    ...(literatureReuse ? { literatureReuse } : {}),
     execution: {
       producer: {
         host: config.producer.agent,
